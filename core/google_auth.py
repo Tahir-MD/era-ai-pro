@@ -16,7 +16,8 @@ import json
 import threading
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from core.paths import app_dir
+BASE_DIR = app_dir()
 CRED_FILE = BASE_DIR / "config" / "google_credentials.json"       # tests monkeypatch
 TOKEN_FILE = BASE_DIR / "config" / "google_token.json"
 SCOPES = [

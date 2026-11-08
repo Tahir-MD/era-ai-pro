@@ -14,7 +14,8 @@ import re
 from difflib import get_close_matches
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from core.paths import app_dir
+BASE_DIR = app_dir()
 FILE = BASE_DIR / "memory" / "contacts.json"               # tests monkeypatch
 API_CONFIG = BASE_DIR / "config" / "api_keys.json"
 

@@ -414,7 +414,7 @@ class JarvisLive:
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
 
-        _base_dir = Path(__file__).resolve().parent
+        _base_dir = BASE_DIR
         _inline_names = {t["name"] for t in TOOL_DECLARATIONS}
 
         # File-backed tools: every actions/*.py with a TOOL dict, discovered the

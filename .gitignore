@@ -48,3 +48,15 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# ── ERA Pro v2 additions (Tahir Mahmood) ──
+config/google_credentials.json
+config/google_token.json
+memory/browser_profiles/
+memory/contacts.json
+memory/routines.json
+memory/mode.json
+memory/knowledge.db
+memory/*.sqlite
+*.spec
+ERA-windows.zip
