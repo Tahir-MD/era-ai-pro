@@ -72,6 +72,8 @@ from memory.config_manager     import (
     get_brief_enabled, get_voice, load_api_keys, get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
 )
 from core.plugin_loader        import discover_plugins
+from core import gemini_compat as _gemini_compat
+_gemini_compat.install()      # survive retired Gemini model names (404 NOT_FOUND)
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices

@@ -345,3 +345,79 @@ def test_prompt_routes_new_tools():
     p = (Path(__file__).resolve().parent.parent / "core" / "prompt.txt").read_text(encoding="utf-8")
     for n in ("calendar_manager", "gmail_manager", "messenger", "ide_control", "contacts"):
         assert n in p, n
+
+
+# ===================================================================== news fallback
+RSS = b"""<?xml version="1.0"?><rss><channel>
+<item><title>Big story happens - Dawn</title><link>https://n.example/1</link><source>Dawn</source><description>&lt;a href="x"&gt;Big story happens&lt;/a&gt; &amp;nbsp;</description></item>
+<item><title>Second one - BBC</title><link>https://n.example/2</link><source>BBC</source><description>More detail here</description></item></channel></rss>"""
+
+
+def test_news_falls_back_to_rss_when_gemini_and_ddg_fail(monkeypatch):
+    from actions import web_search as ws
+    class R:
+        content = RSS
+        def raise_for_status(self): pass
+    import requests
+    monkeypatch.setattr(requests, "get", lambda *a, **k: R())
+    monkeypatch.setattr(ws, "_gemini_search", lambda q: (_ for _ in ()).throw(RuntimeError("429 quota")))
+    monkeypatch.setattr(ws, "_ddg_news", lambda q, max_results=8: (_ for _ in ()).throw(RuntimeError("ratelimit")))
+    out = ws._news("")
+    assert "Big story happens" in out and "[Dawn]" in out and "https://n.example/2" in out and "- Dawn" not in out
+    assert "More detail here" in out
+
+
+def test_news_reports_failure_only_when_all_three_fail(monkeypatch):
+    from actions import web_search as ws
+    import requests
+    boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+    monkeypatch.setattr(requests, "get", boom); monkeypatch.setattr(ws, "_gemini_search", boom); monkeypatch.setattr(ws, "_ddg_news", boom)
+    t = time.time(); out = ws._news("x")
+    assert out.startswith("No news found") and time.time() - t < 5          # unblocks as soon as all fail, not after the timeout
+
+
+# ===================================================================== gemini model fallback
+class _M:                                   # fake SDK model listing entry
+    def __init__(self, name, acts=("generateContent",)): self.name, self.supported_actions = name, list(acts)
+
+
+def test_rank_prefers_stable_newest_flash_and_skips_non_text():
+    from core import gemini_compat as gc
+    names = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-flash-preview", "gemini-2.5-flash-image",
+             "gemini-2.5-flash-preview-tts", "gemini-live-2.5-flash", "gemma-3-27b", "gemini-2.5-pro"]
+    r = gc.rank(names, want_lite=False)
+    assert r[0] == "gemini-2.5-flash" and "gemini-2.5-flash-image" not in r and "gemini-2.5-flash-preview-tts" not in r and "gemini-2.5-pro" not in r
+    assert gc.rank(names, want_lite=True)[0] == "gemini-2.5-flash-lite"
+
+
+def test_wrapper_retries_with_discovered_model_and_remembers(monkeypatch, capsys):
+    from core import gemini_compat as gc
+    gc._RESOLVED.clear(); monkeypatch.setattr(gc, "_pinned", lambda: "")
+    calls = []
+    class Models:
+        def list(self): return [_M("models/gemini-2.5-flash"), _M("models/text-embedding-004", ("embedContent",))]
+        def generate_content(self, *, model, contents, config=None):
+            calls.append(model)
+            if model == "gemini-flash-latest": raise RuntimeError("404 NOT_FOUND. models/gemini-flash-latest is not found for API version v1")
+            return f"ok:{model}"
+    Models.generate_content = gc.wrap(Models.generate_content)
+    m = Models()
+    assert m.generate_content(model="gemini-flash-latest", contents="x") == "ok:gemini-2.5-flash"
+    assert m.generate_content(model="gemini-flash-latest", contents="y") == "ok:gemini-2.5-flash"
+    assert calls == ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash"]       # second call went straight to the working model
+
+
+def test_wrapper_does_not_swallow_other_errors_and_honours_pin(monkeypatch):
+    from core import gemini_compat as gc
+    gc._RESOLVED.clear(); monkeypatch.setattr(gc, "_pinned", lambda: "")
+    class Models:
+        def list(self): return []
+        def generate_content(self, *, model, contents, config=None): raise RuntimeError("429 RESOURCE_EXHAUSTED quota")
+    Models.generate_content = gc.wrap(Models.generate_content)
+    with pytest.raises(RuntimeError, match="429"): Models().generate_content(model="gemini-flash-latest", contents="x")
+    seen = []
+    class M2:
+        def generate_content(self, *, model, contents, config=None): seen.append(model); return "ok"
+    M2.generate_content = gc.wrap(M2.generate_content)
+    monkeypatch.setattr(gc, "_pinned", lambda: "gemini-9-flash")
+    M2().generate_content(model="gemini-flash-latest", contents="x"); assert seen == ["gemini-9-flash"]

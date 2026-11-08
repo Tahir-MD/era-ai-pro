@@ -8,6 +8,7 @@ google-genai>=2.8.0
 requests
 beautifulsoup4
 duckduckgo-search
+ddgs               # newer name of the DuckDuckGo package; web_search tries it first
 playwright
 
 # ── Automation / input control ────────────────────────────────────────────────

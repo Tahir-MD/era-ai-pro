@@ -13,6 +13,13 @@ BASE_DIR        = _get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 
 
+try:
+    from core import gemini_compat as _gc
+    _gc.install()
+except Exception:
+    pass
+
+
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
@@ -162,6 +169,39 @@ def _search(query: str) -> str:
         return _format_ddg(query, results)
 
 
+def _rss_news(query: str, max_results: int = 8) -> list[dict]:
+    """Google News RSS: free, no API key, no quota. Third fallback when Gemini and DDG both fail."""
+    import re as _re
+    import xml.etree.ElementTree as ET
+    from urllib.parse import quote
+    import requests
+
+    region = "US:en"
+    try:
+        region = json.load(open(API_CONFIG_PATH, encoding="utf-8")).get("news_region", region)
+    except Exception:
+        pass
+    gl, _, lang = region.partition(":")
+    lang = lang or "en"
+    base = "https://news.google.com/rss"
+    url = (f"{base}/search?q={quote(query)}&" if query else f"{base}?") + f"hl={lang}-{gl}&gl={gl}&ceid={gl}:{lang}"
+    r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    out = []
+    for item in ET.fromstring(r.content).iter("item"):
+        title = (item.findtext("title") or "").strip()
+        src = (item.findtext("source") or "").strip()
+        if src and title.endswith(" - " + src):
+            title = title[: -len(src) - 3]
+        desc = _re.sub(r"<[^>]+>", " ", item.findtext("description") or "")
+        desc = _re.sub(r"\s+", " ", desc).strip()
+        out.append({"title": title, "source": src, "snippet": "" if desc.startswith(title[:30]) else desc,
+                    "url": (item.findtext("link") or "").strip()})
+        if len(out) >= max_results:
+            break
+    return out
+
+
 def _news(query: str) -> str:
     """
     Runs Gemini grounded search AND DDG news in parallel.
@@ -186,7 +226,7 @@ def _news(query: str) -> str:
         else:
             with lock:
                 failures[0] += 1
-                if failures[0] >= 2:   # both failed — unblock caller
+                if failures[0] >= 3:   # all sources failed — unblock caller
                     done_evt.set()
 
     def _try_gemini():
@@ -204,10 +244,18 @@ def _news(query: str) -> str:
             print(f"[WebSearch] ⚠️ DDG news failed ({e})")
             _store("")
 
+    def _try_rss():
+        try:
+            _store(_format_news(ddg_query, _rss_news(query)))
+        except Exception as e:
+            print(f"[WebSearch] ⚠️ RSS news failed ({e})")
+            _store("")
+
     threading.Thread(target=_try_gemini, daemon=True).start()
     threading.Thread(target=_try_ddg,    daemon=True).start()
+    threading.Thread(target=_try_rss,    daemon=True).start()
 
-    done_evt.wait(timeout=10.0)
+    done_evt.wait(timeout=20.0)
     return result_box[0] or f"No news found for: {query}"
 
 
